@@ -1,9 +1,12 @@
 package server
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"emperror.dev/errors"
@@ -470,42 +473,55 @@ func (svr *Server) generateRouter() (http.Handler, error) {
 							return
 						}
 
-						// Parse form
-						err = req.ParseForm()
-						// Check error
-						if err != nil {
-							resHan.InternalServerError(brctx.LoadFileContent, errors.WithStack(err))
-
-							return
-						}
-
-						// Parse multipart form
-						err = req.ParseMultipartForm(0)
-						if err != nil {
-							resHan.InternalServerError(brctx.LoadFileContent, errors.WithStack(err))
-
-							return
-						}
-						// Get file from form
-						file, fileHeader, err := req.FormFile("file")
-						if err != nil {
-							resHan.InternalServerError(brctx.LoadFileContent, errors.WithStack(err))
-
-							return
-						}
-						// Defer close file
-						defer file.Close()
-						// Defer remove all form
-						defer req.MultipartForm.RemoveAll() //nolint: errcheck // Ignored
-
 						// Create input for put request
 						inp := &bucket.PutInput{
 							RequestPath: requestPath,
-							Filename:    fileHeader.Filename,
-							Body:        file,
-							ContentType: fileHeader.Header.Get("Content-Type"),
-							ContentSize: fileHeader.Size,
 						}
+
+						if req.Form != nil {
+							// Parse multipart form
+							err = req.ParseMultipartForm(0)
+							if err != nil {
+								resHan.InternalServerError(brctx.LoadFileContent, errors.WithStack(err))
+
+								return
+							}
+							// Get file from form
+							file, fileHeader, err := req.FormFile("file")
+							if err != nil {
+								resHan.InternalServerError(brctx.LoadFileContent, errors.WithStack(err))
+
+								return
+							}
+							// Defer close file
+							defer file.Close()
+							// Defer remove all form
+							defer req.MultipartForm.RemoveAll() //nolint: errcheck // Ignored
+
+							inp.Body = file
+							inp.Filename = fileHeader.Filename
+							inp.ContentType = fileHeader.Header.Get("Content-Type")
+							inp.ContentSize = fileHeader.Size
+						} else {
+							// Read req.Body into memory to convert from io.ReadCloser to io.ReadSeeker
+							// suboptimal but this is a POC
+							bodyBytes, err := io.ReadAll(req.Body)
+							if err != nil {
+								resHan.InternalServerError(brctx.LoadFileContent, errors.WithStack(err))
+
+								return
+							}
+							defer req.Body.Close()
+
+							inp.Body = bytes.NewReader(bodyBytes)
+
+							pos := strings.LastIndex(inp.RequestPath, "/")
+							inp.Filename = inp.RequestPath[pos+1:]
+							inp.RequestPath = inp.RequestPath[:pos+1]
+							inp.ContentType = req.Header.Get("content-type")
+							inp.ContentSize = req.ContentLength
+						}
+
 						// Action
 						brctx.Put(req.Context(), inp)
 					})
