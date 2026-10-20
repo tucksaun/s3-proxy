@@ -491,6 +491,9 @@ func (svr *Server) generateRouter() (http.Handler, error) {
 
 							return
 						}
+						// Defer remove all form
+						// Note: net/http won't do it as the request has been copied by middlewares
+						defer req.MultipartForm.RemoveAll() //nolint: errcheck // Ignored
 						// Get file from form
 						file, fileHeader, err := req.FormFile("file")
 						if err != nil {
@@ -500,8 +503,6 @@ func (svr *Server) generateRouter() (http.Handler, error) {
 						}
 						// Defer close file
 						defer file.Close()
-						// Defer remove all form
-						defer req.MultipartForm.RemoveAll() //nolint: errcheck // Ignored
 
 						// Create input for put request
 						inp := &bucket.PutInput{
